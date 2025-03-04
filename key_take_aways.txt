@@ -1,0 +1,103 @@
+1. 
+
+dataset contains 150 rows and 2 columns:
+
+Port_IDs (integer type) - This column has no missing values (150 non-null).
+
+Trade_History (object type) - This column has one missing value (149 non-null).
+
+
+The dataset uses around 2.5 KB of memory.
+
+2. 
+
+Dataset Structure:
+
+150 rows, 2 columns (Port_IDs, Trade_History).
+
+Port_IDs is int64, meaning it's correctly formatted.
+
+Trade_History is object (string-like JSON data) and will need parsing.
+
+Trade_History has 1 missing value.
+
+3. 
+
+time            :        Trade timestamp (convert to datetime).
+symbol          :        Traded asset (e.g., BTCUSDT).
+side            :        BUY/SELL action.
+price           :        Execution price.
+quantity        :        Money involved in the trade.
+realizedProfit  :        Profit/loss from the trade.
+
+4. 
+
+First 5 Rows Analysis:
+Trade_History contains JSON-like structures, meaning each row holds a list of trades for an account.
+We need to extract details like time, symbol, side (BUY/SELL), price, and quantity.
+
+5. 
+
+Missing Values:
+Only 1 missing value in Trade_History, which is minor.
+We can drop or fill this value, depending on requirements.
+
+6. 
+
+metric impact on score :  
+
+| Metric                     | Description                          | Impact on Score      |
+|----------------------------|--------------------------------------|----------------------|
+| ROI (Return on Investment) | Profitability of the account (%)     | Higher is better (+) |
+| PnL (Profit & Loss)        | Total profit or loss ($)             | Higher is better (+) |
+| Sharpe Ratio               | Risk-adjusted return                 | Higher is better (+) |
+| MDD (Maximum Drawdown)     | Max loss from peak value             | Lower is better  (-) |
+| Win Rate                   | Percentage of profitable trades (%)  | Higher is better (+) |
+| Win Positions              | Number of profitable trades          | Higher is better (+) |
+| Total Positions            | Total number of trades               | More positions help but should be weighted properly (+) |
+
+
+
+
+7. 
+
+(Calculating Metrics) 
+
+ROI                         =               Final Value - Initial Value 
+                                            ---------------------------
+                                                  Initial Value
+
+PnL                         =     df.groupby("Port_IDs")["realizedProfit"].sum()
+
+Win Rate                    =                    Win Positions 
+                                                --------------
+                                                Total Position         
+                                  ## Count realizedProfit > 0 using sum().
+
+Sharpe Ratio                =            Mean Daily Returns - Risk-Free Rate 
+                                        --------------------------------------
+                                                 Std Dev of Returns                 
+                                   ## Use returns.mean() / returns.std().
+
+MDD (Maximum Drawdown)      =     Compute peak-to-trough drop using cummax() and min().
+
+Total Positions             :       Count total trades.
+Win Positions               :       Count trades with realizedProfit > 0.
+Win Rate                    :       Win Positions / Total Positions.
+PnL (Profit & Loss)         :       Sum of realizedProfit.
+MDD (Maximum Drawdown)      :       Largest peak-to-trough loss in the trade sequence.
+
+
+8. 
+
+| Metric                        | Definition                                     |                     Formula                                |
+|-------------------------------|------------------------------------------------|------------------------------------------------------------|
+| ROI (Return on Investment)    | Measures return relative to initial investment | (Final Value - Initial Value) / Initial Value |
+| PnL (Profit and Loss)         | Total profit/loss over 90 days                 | ∑ realizedProfit |
+| Sharpe Ratio                  | Risk-adjusted return                           | (Mean Daily Returns - Risk-Free Rate) / Std Dev of Returns |
+| MDD (Maximum Drawdown)        | Max loss from peak                             | (Peak Value - Trough Value) / Peak Value |
+| Win Rate                      | Percentage of profitable trades                | Win Positions / Total Positions |
+| Win Positions                 | Number of trades with positive profit          | Count of realizedProfit > 0 |
+| Total Positions               | Total number of trades                         | Count of all trades |
+
+
