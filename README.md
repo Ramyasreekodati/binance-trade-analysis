@@ -281,4 +281,4 @@ linkedin --> www.linkedin.com/in/ramyask2025
 
 resume --> https://drive.google.com/file/d/1qO1XDu52_EVj89kFH0YO1SXM5CfCaT7O/view?usp=sharing
 
-medium --> 
+medium --> https://medium.com/@ramyasreekodati/ranking-and-analyzing-trading-accounts-using-a-weighted-scoring-system-a25c9c347114
