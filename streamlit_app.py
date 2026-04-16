@@ -24,15 +24,23 @@ DEFAULT_SOURCE = Path("TRADES_CopyTr_90D_ROI.csv")
 
 
 def load_data() -> pd.DataFrame:
+    if DEFAULT_SOURCE.exists():
+        st.sidebar.info(f"Using default dataset: {DEFAULT_SOURCE.name}")
+        uploaded = st.sidebar.file_uploader(
+            "Upload Binance trade CSV to override default dataset (optional)",
+            type=["csv"],
+        )
+        if uploaded is not None:
+            df = load_trade_data(uploaded)
+            st.sidebar.success("Uploaded file loaded successfully.")
+            return df
+        return load_trade_data(DEFAULT_SOURCE)
+
     uploaded = st.sidebar.file_uploader("Upload Binance trade CSV", type=["csv"])
     if uploaded is not None:
         df = load_trade_data(uploaded)
         st.sidebar.success("File uploaded successfully.")
         return df
-
-    if DEFAULT_SOURCE.exists():
-        st.sidebar.info(f"Using default dataset: {DEFAULT_SOURCE.name}")
-        return load_trade_data(DEFAULT_SOURCE)
 
     st.sidebar.warning("Upload a trade file or add TRADES_CopyTr_90D_ROI.csv to the project root.")
     return pd.DataFrame()
