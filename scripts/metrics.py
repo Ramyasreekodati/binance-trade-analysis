@@ -1,7 +1,8 @@
 from __future__ import annotations
-
+import logging
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 
 def _compute_drawdown(equity_curve: pd.Series) -> pd.Series:
@@ -16,28 +17,59 @@ def _annualized_volatility(returns: pd.Series) -> float:
 
 
 def portfolio_summary(trades: pd.DataFrame, initial_capital: float = 100000.0) -> pd.Series:
-    """Calculate key financial metrics for a portfolio trade series."""
+    """Calculate key financial metrics for a portfolio trade series with high robustness."""
+    # Ensure initial_capital is a float
+    try:
+        initial_capital = float(initial_capital)
+    except (ValueError, TypeError):
+        initial_capital = 100000.0
+
+    if trades.empty:
+        return pd.Series({k: 0.0 for k in ["Total_PnL", "Total_Trades", "Win_Rate", "Loss_Rate", "Average_Win", "Average_Loss", "Win_Loss_Ratio", "Trade_Expectancy", "Profit_Factor", "Sharpe_Ratio", "Volatility", "Max_Drawdown", "ROI"]})
+
+    # Validate required columns
+    required = ["realizedProfit", "time"]
+    for col in required:
+        if col not in trades.columns:
+            logging.error(f"Missing required column: {col}")
+            return pd.Series({k: 0.0 for k in ["Total_PnL", "Total_Trades", "Win_Rate", "Loss_Rate", "Average_Win", "Average_Loss", "Win_Loss_Ratio", "Trade_Expectancy", "Profit_Factor", "Sharpe_Ratio", "Volatility", "Max_Drawdown", "ROI"]})
+
     trades = trades.sort_values("time")
-    total_pnl = float(trades["realizedProfit"].sum())
+    
+    # Handle NaNs in profit
+    profits = trades["realizedProfit"].fillna(0.0)
+    
+    total_pnl = float(profits.sum())
     total_trades = int(len(trades))
-    wins = trades[trades["realizedProfit"] > 0]["realizedProfit"]
-    losses = trades[trades["realizedProfit"] < 0]["realizedProfit"]
-    win_rate = float(len(wins) / total_trades * 100) if total_trades else 0.0
-    loss_rate = float(len(losses) / total_trades * 100) if total_trades else 0.0
+    
+    wins = profits[profits > 0]
+    losses = profits[profits < 0]
+    
+    win_rate = float(len(wins) / total_trades * 100) if total_trades > 0 else 0.0
+    loss_rate = float(len(losses) / total_trades * 100) if total_trades > 0 else 0.0
+    
     average_win = float(wins.mean()) if not wins.empty else 0.0
     average_loss = float(losses.mean()) if not losses.empty else 0.0
+    
     expectancy = float(average_win * win_rate / 100 + average_loss * loss_rate / 100)
     win_loss_ratio = float(abs(average_win / average_loss)) if average_loss != 0 else 0.0
     profit_factor = float(wins.sum() / abs(losses.sum())) if losses.sum() != 0 else 0.0
 
-    daily_returns = trades.set_index("time").resample("D")["realizedProfit"].sum()
-    annual_volatility = _annualized_volatility(daily_returns)
-    sharpe_ratio = float(daily_returns.mean() / daily_returns.std(ddof=0) * np.sqrt(252)) if (not daily_returns.empty and daily_returns.std(ddof=0) > 0) else 0.0
+    try:
+        daily_returns = trades.set_index("time")["realizedProfit"].fillna(0.0).resample("D").sum()
+        annual_volatility = _annualized_volatility(daily_returns)
+        std_dev = daily_returns.std(ddof=0)
+        sharpe_ratio = float(daily_returns.mean() / std_dev * np.sqrt(252)) if (not daily_returns.empty and std_dev > 0) else 0.0
+    except Exception as e:
+        logging.warning(f"Portfolio resample error: {e}")
+        annual_volatility = 0.0
+        sharpe_ratio = 0.0
 
-    equity_curve = trades["realizedProfit"].cumsum()
+    equity_curve = profits.cumsum()
     drawdown = _compute_drawdown(equity_curve)
     max_drawdown = float(drawdown.min()) if not drawdown.empty else 0.0
     
+    # Safe ROI Calculation
     roi = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
 
     return pd.Series(
@@ -60,10 +92,31 @@ def portfolio_summary(trades: pd.DataFrame, initial_capital: float = 100000.0) -
 
 
 def summarize_portfolios(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> pd.DataFrame:
-    """Compute portfolio metrics for each Port_IDs."""
-    return (
-        trades_df.groupby("Port_IDs").apply(lambda x: portfolio_summary(x, initial_capital)).reset_index()
-    )
+    """Compute portfolio metrics for each Port_IDs with error handling."""
+    # Debug Logs
+    print(f"DEBUG: trades_df.shape = {getattr(trades_df, 'shape', 'N/A')}")
+    print(f"DEBUG: initial_capital = {initial_capital} (Type: {type(initial_capital)})")
+    
+    if not isinstance(trades_df, pd.DataFrame) or trades_df.empty:
+        logging.warning("summarize_portfolios: Empty or invalid trades_df")
+        return pd.DataFrame()
+
+    try:
+        # Check if Port_IDs exist
+        if "Port_IDs" not in trades_df.columns:
+             st.error("Data error: 'Port_IDs' column missing. Metrics cannot be grouped.")
+             return pd.DataFrame()
+             
+        # Groupby and apply
+        result = trades_df.groupby("Port_IDs").apply(
+            lambda x: portfolio_summary(x, initial_capital),
+            include_groups=False
+        ).reset_index()
+        return result
+    except Exception as e:
+        st.error(f"Metric Calculation Error: {str(e)}")
+        logging.exception("summarize_portfolios failed")
+        return pd.DataFrame()
 
 
 def build_time_analytics(trades_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
