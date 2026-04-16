@@ -28,6 +28,8 @@ def _build_price_series(trades_df: pd.DataFrame, timeframe: str, symbol: str | N
         return pd.DataFrame()
 
     df = df.sort_values("time").set_index("time")
+    timeframe = normalize_timeframe(timeframe)
+    timeframe = timeframe.replace("T", "min").replace("H", "h")
     price_series = df["price"].resample(timeframe).last().ffill().dropna()
     return price_series.to_frame(name="close")
 
@@ -70,6 +72,88 @@ def _signal_explanation(row: pd.Series) -> str:
             "suggesting it may be time to lock in profits."
         )
     return "Market momentum is mixed, so preserve capital until the next clear signal."
+
+
+TIMEFRAME_ALIAS = {
+    "5m": "5T",
+    "1h": "1H",
+    "1d": "1D",
+}
+
+
+def normalize_timeframe(timeframe: str) -> str:
+    """Normalize friendly timeframe labels to pandas resampling frequency."""
+    return TIMEFRAME_ALIAS.get(timeframe.lower(), timeframe)
+
+
+def build_market_insight(
+    trades_df: pd.DataFrame,
+    timeframe: str = "1H",
+    symbol: str | None = None,
+) -> dict[str, str]:
+    """Build a concise market insight card for the selected symbol and timeframe."""
+    indicator_df = build_timeframe_indicators(trades_df, timeframe, symbol)
+    if indicator_df.empty:
+        return {
+            "signal": "No data",
+            "trend": "No data",
+            "rsi": "No data",
+            "action": "No action",
+            "reason": "Not enough trade history to generate an insight.",
+        }
+
+    latest = indicator_df.iloc[-1]
+    trend = "Bullish" if latest["ema_short"] >= latest["ema_long"] else "Bearish"
+    rsi_value = float(latest["rsi"])
+    if rsi_value > 70:
+        rsi_state = "Overbought"
+    elif rsi_value < 30:
+        rsi_state = "Oversold"
+    else:
+        rsi_state = "Neutral"
+
+    action = latest["signal"]
+    reason = (
+        f"{action} signal based on a {trend.lower()} trend and RSI at {rsi_value:.1f} ({rsi_state}). "
+        "The moving average crossover gives direction, while RSI filters the entry timing."
+    )
+
+    return {
+        "signal": action,
+        "trend": trend,
+        "rsi": f"{rsi_value:.1f} ({rsi_state})",
+        "action": action,
+        "reason": reason,
+    }
+
+
+def build_signal_backtest_summary(
+    trades_df: pd.DataFrame,
+    timeframe: str = "1H",
+    symbol: str | None = None,
+) -> dict[str, float]:
+    """Build a quick signal-based backtest summary using price series from trade history."""
+    price_df = _build_price_series(trades_df, timeframe, symbol)
+    if price_df.empty:
+        return {
+            "Cumulative_Return": 0.0,
+            "Max_Drawdown": 0.0,
+            "Signals": 0,
+        }
+
+    indicator_df = build_timeframe_indicators(trades_df, timeframe, symbol)
+    indicator_df = indicator_df.set_index("time").sort_index()
+    indicator_df["position"] = (indicator_df["signal"] == "Buy").astype(int)
+    indicator_df["returns"] = indicator_df["close"].pct_change().fillna(0.0)
+    indicator_df["strategy_returns"] = indicator_df["returns"] * indicator_df["position"].shift(1).fillna(0.0)
+    equity = (1 + indicator_df["strategy_returns"]).cumprod()
+    drawdown = equity / equity.cummax() - 1
+
+    return {
+        "Cumulative_Return": float((equity.iloc[-1] - 1) * 100),
+        "Max_Drawdown": float(drawdown.min() * 100),
+        "Signals": int((indicator_df["signal"] != "Hold").sum()),
+    }
 
 
 def generate_timeframe_summary(

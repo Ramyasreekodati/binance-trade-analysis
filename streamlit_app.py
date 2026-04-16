@@ -16,6 +16,8 @@ from scripts.metrics import (
     summarize_symbol_performance,
 )
 from scripts.strategy import (
+    build_market_insight,
+    build_signal_backtest_summary,
     build_timeframe_indicators,
     compare_timeframe_trends,
     generate_timeframe_summary,
@@ -31,6 +33,11 @@ from scripts.visualization import (
 DEFAULT_SOURCE = Path("TRADES_CopyTr_90D_ROI.csv")
 
 
+@st.cache_data(show_spinner=False)
+def load_default_dataset() -> pd.DataFrame:
+    return load_trade_data(DEFAULT_SOURCE)
+
+
 def load_data() -> pd.DataFrame:
     if DEFAULT_SOURCE.exists():
         st.sidebar.info(f"Using default dataset: {DEFAULT_SOURCE.name}")
@@ -42,7 +49,9 @@ def load_data() -> pd.DataFrame:
             df = load_trade_data(uploaded)
             st.sidebar.success("Uploaded file loaded successfully.")
             return df
-        return load_trade_data(DEFAULT_SOURCE)
+
+        with st.spinner("Loading default dataset..."):
+            return load_default_dataset()
 
     uploaded = st.sidebar.file_uploader("Upload Binance trade CSV", type=["csv"])
     if uploaded is not None:
@@ -69,19 +78,21 @@ def main() -> None:
 
     raw_df = load_data()
     if raw_df.empty:
+        st.warning("No trade data available. Upload a valid Binance trade CSV or add the default dataset file.")
         st.stop()
 
-    trades = clean_trade_data(raw_df)
-    validation = validation_report(trades)
-    metrics_df = summarize_portfolios(trades)
-    portfolio_metrics = calculate_portfolio_metrics(trades)
-    symbol_performance = summarize_symbol_performance(trades)
-    time_analytics = build_time_analytics(trades)
-    strategy_df = build_strategy_performance(trades)
-    anomalies_df = detect_anomalies(trades)
-    overtrading_df = detect_overtrading(trades)
-    insights = generate_insights(trades, metrics_df)
-    backtester = StrategyBacktester(trades)
+    with st.spinner("Cleaning trade data and building analytics..."):
+        trades = clean_trade_data(raw_df)
+        validation = validation_report(trades)
+        metrics_df = summarize_portfolios(trades)
+        portfolio_metrics = calculate_portfolio_metrics(trades)
+        symbol_performance = summarize_symbol_performance(trades)
+        time_analytics = build_time_analytics(trades)
+        strategy_df = build_strategy_performance(trades)
+        anomalies_df = detect_anomalies(trades)
+        overtrading_df = detect_overtrading(trades)
+        insights = generate_insights(trades, metrics_df)
+        backtester = StrategyBacktester(trades)
 
     selected_portfolio = st.sidebar.selectbox(
         "Select portfolio", format_portfolio_selector(metrics_df)
@@ -99,41 +110,67 @@ def main() -> None:
     if selected_portfolio != "All portfolios":
         filtered_portfolio = int(selected_portfolio)
 
-    timeframe_map = {"5m": "5T", "1h": "1H", "1d": "1D"}
+    timeframe_map = {"5m": "5m", "1h": "1h", "1d": "1d"}
     selected_timeframe = timeframe_map[selected_timeframe_label]
+    selected_symbol_filter = None if selected_symbol == "All symbols" else selected_symbol
     timeframe_signals = generate_timeframe_summary(
         trades,
-        ["5T", "1H", "1D"],
-        None if selected_symbol == "All symbols" else selected_symbol,
+        ["5m", "1h", "1d"],
+        selected_symbol_filter,
     )
+    market_insight = build_market_insight(trades, selected_timeframe, selected_symbol_filter)
+    backtest_summary = build_signal_backtest_summary(trades, selected_timeframe, selected_symbol_filter)
 
-    st.header("Portfolio Summary")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Net Realized PnL", f"{portfolio_metrics['Total_PnL']:,.2f} USDT")
-    col2.metric("Total Trades", f"{portfolio_metrics['Total_Trades']}")
-    col3.metric("ROI", f"{portfolio_metrics['ROI']:.2f}%")
-    col4.metric("Win Rate", f"{portfolio_metrics['Win_Rate']:.1f}%")
+    st.header("Market Overview 🧭")
+    overview_col1, overview_col2, overview_col3, overview_col4 = st.columns(4)
+    overview_col1.metric("Net Realized PnL", f"{portfolio_metrics['Total_PnL']:,.2f} USDT")
+    overview_col2.metric("ROI", f"{portfolio_metrics['ROI']:.2f}%")
+    overview_col3.metric("Win Rate", f"{portfolio_metrics['Win_Rate']:.1f}%")
+    overview_col4.metric("Total Trades", f"{portfolio_metrics['Total_Trades']}")
 
     st.markdown("---")
-    st.subheader("Trading Insights 📈")
-    st.write("Signals shown below combine EMA crossover with RSI momentum to produce Buy / Sell / Hold guidance.")
+    st.subheader("Market Insight & Recommendation")
+    insight_col1, insight_col2, insight_col3, insight_col4 = st.columns([1, 1, 1, 2])
+    insight_col1.metric("Signal", market_insight["signal"])
+    insight_col2.metric("Trend", market_insight["trend"])
+    insight_col3.metric("RSI", market_insight["rsi"])
+    insight_col4.metric("Recommended Action", market_insight["action"])
+    st.info(market_insight["reason"])
+
+    st.markdown("---")
+    st.subheader("Decision Intelligence")
+    st.write(
+        "This section translates technical indicators into a clear recommendation, so the dashboard becomes actionable rather than just visual."
+    )
     st.dataframe(timeframe_signals, use_container_width=True)
 
-    symbol_trend = selected_symbol if selected_symbol != "All symbols" else None
-    selected_indicators = build_timeframe_indicators(trades, selected_timeframe, symbol_trend)
+    selected_indicators = build_timeframe_indicators(trades, selected_timeframe, selected_symbol_filter)
     if not selected_indicators.empty:
-        st.write(f"**{selected_symbol}** indicator chart over selected timeframe ({selected_timeframe_label})")
+        st.subheader("Charts & Indicators")
+        st.write(
+            f"Viewing {selected_symbol if selected_symbol_filter else 'all available symbols'} on the {selected_timeframe_label} timeframe."
+        )
         st.line_chart(
-            selected_indicators.set_index("time")["close"].rename("Price"),
+            selected_indicators.set_index("time")[['close', 'ema_short', 'ema_long']],
+            use_container_width=True,
+        )
+        st.line_chart(
+            selected_indicators.set_index("time")[["rsi"]],
             use_container_width=True,
         )
 
-    if selected_symbol != "All symbols":
-        st.markdown(f"**Trend comparison for {selected_symbol}:**")
+    if selected_symbol_filter:
+        st.markdown(f"**Trend comparison for {selected_symbol_filter}:**")
         st.dataframe(
-            compare_timeframe_trends(trades, [selected_symbol], ["5T", "1H", "1D"]),
+            compare_timeframe_trends(trades, [selected_symbol_filter], ["5m", "1h", "1d"]),
             use_container_width=True,
         )
+
+    st.subheader("Backtest Snapshot")
+    backtest_col1, backtest_col2, backtest_col3 = st.columns(3)
+    backtest_col1.metric("Signal Count", f"{backtest_summary['Signals']}")
+    backtest_col2.metric("Backtest Return", f"{backtest_summary['Cumulative_Return']:.2f}%")
+    backtest_col3.metric("Max Drawdown", f"{backtest_summary['Max_Drawdown']:.2f}%")
 
     st.subheader("Symbol Comparison")
     st.write("Review top coins by realized profit and average trade performance.")
