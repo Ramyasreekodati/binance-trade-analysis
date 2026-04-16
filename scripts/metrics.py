@@ -103,6 +103,34 @@ def build_strategy_performance(trades_df: pd.DataFrame) -> pd.DataFrame:
     return performance
 
 
+def calculate_portfolio_metrics(trades_df: pd.DataFrame) -> dict[str, float]:
+    """Return headline performance metrics for the entire trade dataset."""
+    total_pnl = float(trades_df["realizedProfit"].sum())
+    invested = float(trades_df["trade_value"].abs().sum())
+    roi = float((total_pnl / invested) * 100) if invested != 0 else 0.0
+    wins = trades_df[trades_df["realizedProfit"] > 0]
+    total_trades = len(trades_df)
+    win_rate = float(len(wins) / total_trades * 100) if total_trades else 0.0
+    return {
+        "Total_PnL": total_pnl,
+        "ROI": roi,
+        "Win_Rate": win_rate,
+        "Total_Trades": total_trades,
+    }
+
+
+def summarize_symbol_performance(trades_df: pd.DataFrame) -> pd.DataFrame:
+    """Return symbol-level performance metrics for coin comparison."""
+    symbol_summary = (
+        trades_df.groupby("symbol")["realizedProfit"]
+        .agg(Total_PnL="sum", Trade_Count="count")
+        .assign(ROI=lambda x: x["Total_PnL"] / x["Total_PnL"].abs().replace(0, 1) * 100)
+        .reset_index()
+        .sort_values(by="Total_PnL", ascending=False)
+    )
+    return symbol_summary
+
+
 def detect_overtrading(trades_df: pd.DataFrame, threshold_per_hour: int = 20) -> pd.DataFrame:
     """Detect portfolios that execute a large number of trades in a short time window."""
     hourly_counts = (

@@ -9,9 +9,17 @@ from scripts.insights import generate_insights
 from scripts.metrics import (
     build_strategy_performance,
     build_time_analytics,
+    calculate_portfolio_metrics,
     detect_anomalies,
     detect_overtrading,
     summarize_portfolios,
+    summarize_symbol_performance,
+)
+from scripts.strategy import (
+    build_timeframe_indicators,
+    compare_timeframe_trends,
+    generate_timeframe_summary,
+    strategy_explanation_text,
 )
 from scripts.visualization import (
     plot_drawdown_curve,
@@ -66,6 +74,8 @@ def main() -> None:
     trades = clean_trade_data(raw_df)
     validation = validation_report(trades)
     metrics_df = summarize_portfolios(trades)
+    portfolio_metrics = calculate_portfolio_metrics(trades)
+    symbol_performance = summarize_symbol_performance(trades)
     time_analytics = build_time_analytics(trades)
     strategy_df = build_strategy_performance(trades)
     anomalies_df = detect_anomalies(trades)
@@ -76,6 +86,11 @@ def main() -> None:
     selected_portfolio = st.sidebar.selectbox(
         "Select portfolio", format_portfolio_selector(metrics_df)
     )
+    selected_timeframe_label = st.sidebar.selectbox(
+        "Select timeframe", ["5m", "1h", "1d"], index=1
+    )
+    selected_symbol = st.sidebar.selectbox(
+        "Choose symbol for comparison", ["All symbols"] + sorted(trades["symbol"].unique().astype(str).tolist()))
     show_anomalies = st.sidebar.checkbox("Show anomaly trade table", value=True)
     show_strategy = st.sidebar.checkbox("Show strategy evaluation", value=True)
     show_backtest = st.sidebar.checkbox("Show backtest diagnostics", value=True)
@@ -84,17 +99,54 @@ def main() -> None:
     if selected_portfolio != "All portfolios":
         filtered_portfolio = int(selected_portfolio)
 
-    st.header("Portfolio Summary")
-    total_profit = float(trades["realizedProfit"].sum())
-    average_sharpe = float(metrics_df["Sharpe_Ratio"].mean())
-    average_win_rate = float(metrics_df["Win_Rate"].mean())
-    average_drawdown = float(metrics_df["Max_Drawdown"].mean())
+    timeframe_map = {"5m": "5T", "1h": "1H", "1d": "1D"}
+    selected_timeframe = timeframe_map[selected_timeframe_label]
+    timeframe_signals = generate_timeframe_summary(
+        trades,
+        ["5T", "1H", "1D"],
+        None if selected_symbol == "All symbols" else selected_symbol,
+    )
 
+    st.header("Portfolio Summary")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Net Realized PnL", f"{total_profit:,.2f} USDT")
-    col2.metric("Average Sharpe Ratio", f"{average_sharpe:.2f}")
-    col3.metric("Average Win Rate", f"{average_win_rate:.1f}%")
-    col4.metric("Average Max Drawdown", f"{average_drawdown:,.2f} USDT")
+    col1.metric("Net Realized PnL", f"{portfolio_metrics['Total_PnL']:,.2f} USDT")
+    col2.metric("Total Trades", f"{portfolio_metrics['Total_Trades']}")
+    col3.metric("ROI", f"{portfolio_metrics['ROI']:.2f}%")
+    col4.metric("Win Rate", f"{portfolio_metrics['Win_Rate']:.1f}%")
+
+    st.markdown("---")
+    st.subheader("Trading Insights 📈")
+    st.write("Signals shown below combine EMA crossover with RSI momentum to produce Buy / Sell / Hold guidance.")
+    st.dataframe(timeframe_signals, use_container_width=True)
+
+    symbol_trend = selected_symbol if selected_symbol != "All symbols" else None
+    selected_indicators = build_timeframe_indicators(trades, selected_timeframe, symbol_trend)
+    if not selected_indicators.empty:
+        st.write(f"**{selected_symbol}** indicator chart over selected timeframe ({selected_timeframe_label})")
+        st.line_chart(
+            selected_indicators.set_index("time")["close"].rename("Price"),
+            use_container_width=True,
+        )
+
+    if selected_symbol != "All symbols":
+        st.markdown(f"**Trend comparison for {selected_symbol}:**")
+        st.dataframe(
+            compare_timeframe_trends(trades, [selected_symbol], ["5T", "1H", "1D"]),
+            use_container_width=True,
+        )
+
+    st.subheader("Symbol Comparison")
+    st.write("Review top coins by realized profit and average trade performance.")
+    st.dataframe(symbol_performance.head(15), use_container_width=True)
+
+    csv = trades.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download cleaned trade dataset",
+        csv,
+        "binance_trade_analysis.csv",
+        "text/csv",
+        key="download-data",
+    )
 
     with st.expander("Data validation summary"):
         st.json(validation)
@@ -116,6 +168,9 @@ def main() -> None:
     st.subheader("Key Insights")
     for insight in insights:
         st.write(f"- {insight}")
+
+    st.subheader("Strategy Explanation 🧠")
+    st.markdown(strategy_explanation_text())
 
     if show_strategy:
         st.subheader("Strategy & Pattern Performance")
