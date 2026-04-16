@@ -31,12 +31,14 @@ def parse_trade_history(raw_value: Any) -> list[dict[str, Any]]:
         return []
 
     if isinstance(raw_value, str):
+        # Fast path: try json loading first as it's optimized in C
         try:
-            trades = ast.literal_eval(raw_value)
-        except (ValueError, SyntaxError):
+            trades = json.loads(raw_value)
+        except (ValueError, json.JSONDecodeError):
             try:
-                trades = json.loads(raw_value)
-            except Exception:
+                # Fallback for Python-like string literals (higher safety, lower speed)
+                trades = ast.literal_eval(raw_value)
+            except (ValueError, SyntaxError):
                 return []
     elif isinstance(raw_value, (list, tuple)):
         trades: list[dict[str, Any]] = []
@@ -78,16 +80,30 @@ def coerce_timestamp(value: Any) -> pd.Timestamp | NaTType:
 
 
 def explode_trade_history(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """Build a normalized trade table from nested Trade_History records."""
-    df = raw_df.copy()
-    if "Trade_History" not in df.columns:
-        return df
+    """High-performance flattening of nested trade history."""
+    if "Trade_History" not in raw_df.columns:
+        return raw_df
 
-    df["Parsed_Trades"] = df["Trade_History"].map(parse_trade_history)
-    exploded = df.explode("Parsed_Trades", ignore_index=True)
-    parsed = pd.json_normalize(exploded["Parsed_Trades"].tolist())
-    parsed["Port_IDs"] = exploded["Port_IDs"].tolist()
-    return parsed
+    # Extract all data in one go to avoid pandas overhead
+    port_ids = raw_df["Port_IDs"].values
+    histories = raw_df["Trade_History"].values
+    
+    flat_data = []
+    flat_port_ids = []
+    
+    for i, raw_val in enumerate(histories):
+        parsed = parse_trade_history(raw_val)
+        if parsed:
+            flat_data.extend(parsed)
+            flat_port_ids.extend([port_ids[i]] * len(parsed))
+            
+    if not flat_data:
+        return pd.DataFrame()
+        
+    # Build dataframe directly from records
+    parsed_df = pd.DataFrame.from_records(flat_data)
+    parsed_df["Port_IDs"] = flat_port_ids
+    return parsed_df
 
 
 def clean_trade_data(raw_df: pd.DataFrame) -> pd.DataFrame:

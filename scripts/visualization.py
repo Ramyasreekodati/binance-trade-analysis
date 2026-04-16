@@ -6,15 +6,7 @@ import plotly.graph_objects as go
 
 
 def plot_equity_curve(trades_df: pd.DataFrame, portfolio_id: int | None = None) -> go.Figure:
-    """Plot cumulative equity curve from trades.
-    
-    Args:
-        trades_df: DataFrame with trade data
-        portfolio_id: Optional portfolio ID to filter
-        
-    Returns:
-        Plotly figure with equity curve
-    """
+    """Plot cumulative equity curve from trades with smoothing for high-density data."""
     df = trades_df.copy()
     if portfolio_id is not None:
         df = df[df["Port_IDs"] == portfolio_id]
@@ -22,48 +14,42 @@ def plot_equity_curve(trades_df: pd.DataFrame, portfolio_id: int | None = None) 
     if df.empty:
         return px.line(title="Equity Curve - No Data")
 
-    equity = (
-        df.sort_values("time").groupby("time")["realizedProfit"].sum().cumsum().rename("Equity").reset_index()
-    )
+    df = df.sort_values("time")
     
-    fig = px.line(
-        equity,
-        x="time",
-        y="Equity",
-        title="Cumulative Equity Curve",
-        markers=True,
-        labels={"time": "Date/Time", "Equity": "Cumulative PnL (USDT)"}
-    )
+    # If too many points, aggregate to hourly to reduce noise
+    if len(df) > 500:
+        df["time"] = df["time"].dt.floor("H")
+        equity = df.groupby("time")["realizedProfit"].sum().cumsum().rename("Equity").reset_index()
+    else:
+        equity = df.groupby("time")["realizedProfit"].sum().cumsum().rename("Equity").reset_index()
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=equity["time"],
+        y=equity["Equity"],
+        mode="lines",
+        name="Equity",
+        line=dict(color="#0066cc", width=2.5),
+        fill='tozeroy',
+        fillcolor='rgba(0, 102, 204, 0.1)',
+        hovertemplate="<b>Date:</b> %{x}<br><b>PnL:</b> %{y:,.2f} USDT<extra></extra>"
+    ))
     
     fig.update_layout(
+        title="Cumulative Equity Performance (Realized PnL)",
         hovermode="x unified",
         template="plotly_white",
-        height=450,
-        xaxis_title="Date/Time",
-        yaxis_title="Cumulative PnL (USDT)",
-        showlegend=True,
-        legend=dict(x=0.01, y=0.99),
-    )
-    
-    fig.update_traces(
-        name="Equity",
-        line=dict(color="#1f77b4", width=2),
-        marker=dict(size=4, opacity=0.6)
+        height=500,
+        xaxis=dict(title="Timeline", showgrid=True, gridcolor='rgba(0,0,0,0.05)'),
+        yaxis=dict(title="Cumulative PnL (USDT)", showgrid=True, gridcolor='rgba(0,0,0,0.05)', tickformat=",.0f"),
+        margin=dict(l=20, r=20, t=50, b=20),
     )
     
     return fig
 
 
 def plot_drawdown_curve(trades_df: pd.DataFrame, portfolio_id: int | None = None) -> go.Figure:
-    """Plot drawdown (peak-to-trough decline) from trades.
-    
-    Args:
-        trades_df: DataFrame with trade data
-        portfolio_id: Optional portfolio ID to filter
-        
-    Returns:
-        Plotly figure with drawdown curve
-    """
+    """Plot drawdown curve with noise reduction for high-density data."""
     df = trades_df.copy()
     if portfolio_id is not None:
         df = df[df["Port_IDs"] == portfolio_id]
@@ -71,36 +57,39 @@ def plot_drawdown_curve(trades_df: pd.DataFrame, portfolio_id: int | None = None
     if df.empty:
         return px.area(title="Drawdown Curve - No Data")
 
-    equity = df.sort_values("time")["realizedProfit"].cumsum()
-    drawdown = equity - equity.cummax()
-    drawdown_df = pd.DataFrame({
-        "time": df.sort_values("time")["time"].values,
-        "Drawdown": drawdown.values
-    })
+    df = df.sort_values("time")
     
-    fig = px.area(
-        drawdown_df,
-        x="time",
-        y="Drawdown",
-        title="Drawdown Curve (Peak-to-Trough Decline)",
-        labels={"time": "Date/Time", "Drawdown": "Drawdown (USDT)"},
-        color_discrete_sequence=["#d62728"]
-    )
+    # Pre-calculate equity to identify drawdown
+    df["cum_pnl"] = df["realizedProfit"].cumsum()
+    df["drawdown"] = df["cum_pnl"] - df["cum_pnl"].cummax()
+    
+    # If too many points, aggregate to hourly
+    if len(df) > 500:
+        df["time"] = df["time"].dt.floor("H")
+        drawdown_df = df.groupby("time")["drawdown"].min().rename("Drawdown").reset_index()
+    else:
+        drawdown_df = df[["time", "drawdown"]].rename(columns={"drawdown": "Drawdown"})
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=drawdown_df["time"],
+        y=drawdown_df["Drawdown"],
+        mode="lines",
+        name="Drawdown",
+        fill='tozeroy',
+        line=dict(color="#e44c4c", width=1.5),
+        fillcolor='rgba(228, 76, 76, 0.2)',
+        hovertemplate="<b>Date:</b> %{x}<br><b>Drawdown:</b> %{y:,.2f} USDT<extra></extra>"
+    ))
     
     fig.update_layout(
+        title="Peak-to-Trough Drawdown Analysis",
         hovermode="x unified",
         template="plotly_white",
-        height=450,
-        xaxis_title="Date/Time",
-        yaxis_title="Drawdown (USDT)",
-        showlegend=True,
-        legend=dict(x=0.01, y=0.99),
-    )
-    
-    fig.update_traces(
-        name="Drawdown",
-        fillcolor="rgba(214, 39, 40, 0.3)",
-        line=dict(color="#d62728", width=2)
+        height=400,
+        xaxis=dict(title="Timeline", showgrid=True, gridcolor='rgba(0,0,0,0.05)'),
+        yaxis=dict(title="Drawdown (USDT)", showgrid=True, gridcolor='rgba(0,0,0,0.05)', tickformat=",.0f"),
+        margin=dict(l=20, r=20, t=50, b=20),
     )
     
     return fig

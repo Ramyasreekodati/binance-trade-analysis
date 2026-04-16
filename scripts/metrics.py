@@ -15,7 +15,7 @@ def _annualized_volatility(returns: pd.Series) -> float:
     return float(returns.std(ddof=0) * np.sqrt(252))
 
 
-def portfolio_summary(trades: pd.DataFrame) -> pd.Series:
+def portfolio_summary(trades: pd.DataFrame, initial_capital: float = 100000.0) -> pd.Series:
     """Calculate key financial metrics for a portfolio trade series."""
     trades = trades.sort_values("time")
     total_pnl = float(trades["realizedProfit"].sum())
@@ -27,16 +27,18 @@ def portfolio_summary(trades: pd.DataFrame) -> pd.Series:
     average_win = float(wins.mean()) if not wins.empty else 0.0
     average_loss = float(losses.mean()) if not losses.empty else 0.0
     expectancy = float(average_win * win_rate / 100 + average_loss * loss_rate / 100)
-    win_loss_ratio = float(abs(average_win / average_loss)) if average_loss != 0 else float("inf")
-    profit_factor = float(wins.sum() / abs(losses.sum())) if losses.sum() != 0 else float("inf")
+    win_loss_ratio = float(abs(average_win / average_loss)) if average_loss != 0 else 0.0
+    profit_factor = float(wins.sum() / abs(losses.sum())) if losses.sum() != 0 else 0.0
 
     daily_returns = trades.set_index("time").resample("D")["realizedProfit"].sum()
     annual_volatility = _annualized_volatility(daily_returns)
-    sharpe_ratio = float(daily_returns.mean() / daily_returns.std(ddof=0) * np.sqrt(252)) if daily_returns.std(ddof=0) else 0.0
+    sharpe_ratio = float(daily_returns.mean() / daily_returns.std(ddof=0) * np.sqrt(252)) if (not daily_returns.empty and daily_returns.std(ddof=0) > 0) else 0.0
 
     equity_curve = trades["realizedProfit"].cumsum()
     drawdown = _compute_drawdown(equity_curve)
     max_drawdown = float(drawdown.min()) if not drawdown.empty else 0.0
+    
+    roi = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
 
     return pd.Series(
         {
@@ -52,14 +54,15 @@ def portfolio_summary(trades: pd.DataFrame) -> pd.Series:
             "Sharpe_Ratio": sharpe_ratio,
             "Volatility": annual_volatility,
             "Max_Drawdown": max_drawdown,
+            "ROI": roi,
         }
     )
 
 
-def summarize_portfolios(trades_df: pd.DataFrame) -> pd.DataFrame:
+def summarize_portfolios(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> pd.DataFrame:
     """Compute portfolio metrics for each Port_IDs."""
     return (
-        trades_df.groupby("Port_IDs").apply(portfolio_summary).reset_index()
+        trades_df.groupby("Port_IDs").apply(lambda x: portfolio_summary(x, initial_capital)).reset_index()
     )
 
 
@@ -127,19 +130,19 @@ def calculate_portfolio_metrics(trades_df: pd.DataFrame, initial_capital: float 
     }
 
 
-def summarize_symbol_performance(trades_df: pd.DataFrame) -> pd.DataFrame:
+def summarize_symbol_performance(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> pd.DataFrame:
     """Return symbol-level performance metrics for coin comparison.
     
-    ROI is calculated as: (Total_PnL / Total_Traded_Value) * 100
-    where Total_Traded_Value is the sum of absolute trade values for that symbol.
+    ROI is calculated as: (Total_PnL / Initial_Capital) * 100
+    to show each symbol's contribution to total portfolio performance.
     """
     symbol_summary = (
         trades_df.groupby("symbol")
         .apply(lambda x: pd.Series({
             "Total_PnL": x["realizedProfit"].sum(),
             "Trade_Count": len(x),
-            "Average_PnL": x["realizedProfit"].mean(),
-            "ROI": float((x["realizedProfit"].sum() / x["trade_value"].abs().sum() * 100) if x["trade_value"].abs().sum() != 0 else 0.0),
+            "Average_PnL": x["realizedProfit"].mean() if not x.empty else 0.0,
+            "ROI": float((x["realizedProfit"].sum() / initial_capital * 100) if initial_capital > 0 else 0.0),
         }))
         .reset_index()
         .sort_values(by="Total_PnL", ascending=False)

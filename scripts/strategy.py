@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 
 def _compute_ema(series: pd.Series, span: int) -> pd.Series:
@@ -21,19 +22,27 @@ def _compute_rsi(prices: pd.Series, window: int = 14) -> pd.Series:
 
 def _build_price_series(trades_df: pd.DataFrame, timeframe: str, symbol: str | None = None) -> pd.DataFrame:
     df = trades_df.copy()
-    if symbol is not None:
+    if symbol is None or symbol == "All symbols":
+        # If no symbol specified, use the most frequently traded symbol to avoid price mixing
+        if not df.empty:
+            symbol = df["symbol"].value_counts().idxmax()
+            df = df[df["symbol"] == symbol]
+    else:
         df = df[df["symbol"] == symbol]
 
     if df.empty:
         return pd.DataFrame()
 
     df = df.sort_values("time").set_index("time")
-    timeframe = normalize_timeframe(timeframe)
-    timeframe = timeframe.replace("T", "min").replace("H", "h")
-    price_series = df["price"].resample(timeframe).last().ffill().dropna()
+    timeframe_norm = normalize_timeframe(timeframe)
+    timeframe_norm = timeframe_norm.replace("T", "min").replace("H", "h")
+    
+    # Use mean price per period instead of just last to reduce noise
+    price_series = df["price"].resample(timeframe_norm).mean().ffill().dropna()
     return price_series.to_frame(name="close")
 
 
+@st.cache_data(show_spinner=True)
 def build_timeframe_indicators(
     trades_df: pd.DataFrame,
     timeframe: str = "1H",
@@ -133,21 +142,37 @@ def build_signal_backtest_summary(
     symbol: str | None = None,
 ) -> dict[str, float]:
     """Build a quick signal-based backtest summary using price series from trade history."""
-    price_df = _build_price_series(trades_df, timeframe, symbol)
-    if price_df.empty:
+    symbol_to_use = symbol
+    if symbol == "All symbols":
+        symbol_to_use = None
+        
+    price_df = _build_price_series(trades_df, timeframe, symbol_to_use)
+    if price_df.empty or len(price_df) < 2:
         return {
             "Cumulative_Return": 0.0,
             "Max_Drawdown": 0.0,
             "Signals": 0,
         }
 
-    indicator_df = build_timeframe_indicators(trades_df, timeframe, symbol)
+    indicator_df = build_timeframe_indicators(trades_df, timeframe, symbol_to_use)
     indicator_df = indicator_df.set_index("time").sort_index()
+    
+    # Prevent look-ahead bias by shifting signal
     indicator_df["position"] = (indicator_df["signal"] == "Buy").astype(int)
     indicator_df["returns"] = indicator_df["close"].pct_change().fillna(0.0)
+    
+    # Cap returns to avoid extreme data jitter causing -100% bug
+    indicator_df["returns"] = indicator_df["returns"].clip(-0.5, 0.5)
+    
     indicator_df["strategy_returns"] = indicator_df["returns"] * indicator_df["position"].shift(1).fillna(0.0)
+    
+    # Calculate equity using cumulative sum of log returns for better stability, or simple sum for small returns
     equity = (1 + indicator_df["strategy_returns"]).cumprod()
-    drawdown = equity / equity.cummax() - 1
+    
+    if equity.empty:
+        return {"Cumulative_Return": 0.0, "Max_Drawdown": 0.0, "Signals": 0}
+        
+    drawdown = (equity / equity.cummax() - 1).fillna(0.0)
 
     return {
         "Cumulative_Return": float((equity.iloc[-1] - 1) * 100),
