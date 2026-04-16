@@ -169,3 +169,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Project artifacts
+outputs/
+README_NEW.md
+

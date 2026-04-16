@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+def _compute_drawdown(equity_curve: pd.Series) -> pd.Series:
+    running_max = equity_curve.cummax()
+    return equity_curve - running_max
+
+
+def _annualized_volatility(returns: pd.Series) -> float:
+    if returns.empty:
+        return 0.0
+    return float(returns.std(ddof=0) * np.sqrt(252))
+
+
+def portfolio_summary(trades: pd.DataFrame) -> pd.Series:
+    """Calculate key financial metrics for a portfolio trade series."""
+    trades = trades.sort_values("time")
+    total_pnl = float(trades["realizedProfit"].sum())
+    total_trades = int(len(trades))
+    wins = trades[trades["realizedProfit"] > 0]["realizedProfit"]
+    losses = trades[trades["realizedProfit"] < 0]["realizedProfit"]
+    win_rate = float(len(wins) / total_trades * 100) if total_trades else 0.0
+    loss_rate = float(len(losses) / total_trades * 100) if total_trades else 0.0
+    average_win = float(wins.mean()) if not wins.empty else 0.0
+    average_loss = float(losses.mean()) if not losses.empty else 0.0
+    expectancy = float(average_win * win_rate / 100 + average_loss * loss_rate / 100)
+    win_loss_ratio = float(abs(average_win / average_loss)) if average_loss != 0 else float("inf")
+    profit_factor = float(wins.sum() / abs(losses.sum())) if losses.sum() != 0 else float("inf")
+
+    daily_returns = trades.set_index("time").resample("D")["realizedProfit"].sum()
+    annual_volatility = _annualized_volatility(daily_returns)
+    sharpe_ratio = float(daily_returns.mean() / daily_returns.std(ddof=0) * np.sqrt(252)) if daily_returns.std(ddof=0) else 0.0
+
+    equity_curve = trades["realizedProfit"].cumsum()
+    drawdown = _compute_drawdown(equity_curve)
+    max_drawdown = float(drawdown.min()) if not drawdown.empty else 0.0
+
+    return pd.Series(
+        {
+            "Total_PnL": total_pnl,
+            "Total_Trades": total_trades,
+            "Win_Rate": win_rate,
+            "Loss_Rate": loss_rate,
+            "Average_Win": average_win,
+            "Average_Loss": average_loss,
+            "Win_Loss_Ratio": win_loss_ratio,
+            "Trade_Expectancy": expectancy,
+            "Profit_Factor": profit_factor,
+            "Sharpe_Ratio": sharpe_ratio,
+            "Volatility": annual_volatility,
+            "Max_Drawdown": max_drawdown,
+        }
+    )
+
+
+def summarize_portfolios(trades_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute portfolio metrics for each Port_IDs."""
+    return (
+        trades_df.groupby("Port_IDs").apply(portfolio_summary).reset_index()
+    )
+
+
+def build_time_analytics(trades_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Build daily and hourly time-series analytics from trade history."""
+    df = trades_df.copy()
+    df["date"] = df["time"].dt.date
+    df["hour"] = df["time"].dt.hour
+    df["weekday"] = df["time"].dt.day_name()
+
+    daily = (
+        df.groupby("date")["realizedProfit"]
+        .agg(Total_PnL="sum", Trade_Count="count")
+        .assign(Cumulative_PnL=lambda x: x["Total_PnL"].cumsum())
+        .reset_index()
+    )
+
+    hourly = (
+        df.groupby("hour")["realizedProfit"]
+        .agg(Total_PnL="sum", Trade_Count="count", Average_PnL="mean")
+        .reset_index()
+    )
+
+    heatmap = (
+        df.groupby(["weekday", "hour"])["realizedProfit"]
+        .sum()
+        .reset_index()
+    )
+
+    return {"daily": daily, "hourly": hourly, "heatmap": heatmap}
+
+
+def build_strategy_performance(trades_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute performance by symbol, side, and position type."""
+    performance = (
+        trades_df.groupby(["symbol", "side", "positionSide"])["realizedProfit"]
+        .agg(Total_PnL="sum", Trade_Count="count", Average_PnL="mean")
+        .reset_index()
+        .sort_values(by="Total_PnL", ascending=False)
+    )
+    return performance
+
+
+def detect_overtrading(trades_df: pd.DataFrame, threshold_per_hour: int = 20) -> pd.DataFrame:
+    """Detect portfolios that execute a large number of trades in a short time window."""
+    hourly_counts = (
+        trades_df.set_index("time")
+        .groupby("Port_IDs")
+        .resample("1H")["realizedProfit"]
+        .count()
+        .reset_index(name="Trades_Per_Hour")
+    )
+    return hourly_counts[hourly_counts["Trades_Per_Hour"] >= threshold_per_hour].sort_values(
+        ["Trades_Per_Hour", "Port_IDs"], ascending=[False, True]
+    )
+
+
+def detect_anomalies(trades_df: pd.DataFrame, zscore_threshold: float = 3.0) -> pd.DataFrame:
+    """Identify suspicious or anomalous trade outcomes."""
+    df = trades_df.copy()
+    profit_std = df["realizedProfit"].std(ddof=0)
+    profit_mean = df["realizedProfit"].mean()
+    if profit_std == 0 or np.isnan(profit_std):
+        return df.iloc[0:0]
+
+    df["profit_zscore"] = (df["realizedProfit"] - profit_mean) / profit_std
+    df["fee_ratio"] = np.where(df["trade_value"] > 0, np.abs(df["fee"] / df["trade_value"]), 0.0)
+    anomalies = df[(df["profit_zscore"].abs() >= zscore_threshold) | (df["fee_ratio"] > 0.02)]
+    return anomalies.sort_values(by=["profit_zscore", "fee_ratio"], ascending=False)
