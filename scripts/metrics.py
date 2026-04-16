@@ -103,11 +103,18 @@ def build_strategy_performance(trades_df: pd.DataFrame) -> pd.DataFrame:
     return performance
 
 
-def calculate_portfolio_metrics(trades_df: pd.DataFrame) -> dict[str, float]:
-    """Return headline performance metrics for the entire trade dataset."""
+def calculate_portfolio_metrics(trades_df: pd.DataFrame, initial_capital: float = 100000.0) -> dict[str, float]:
+    """Return headline performance metrics for the entire trade dataset.
+    
+    Args:
+        trades_df: DataFrame with trade data
+        initial_capital: Initial trading capital in USDT (default 100,000)
+    
+    Returns:
+        Dictionary with Total_PnL, ROI, Win_Rate, Total_Trades
+    """
     total_pnl = float(trades_df["realizedProfit"].sum())
-    invested = float(trades_df["trade_value"].abs().sum())
-    roi = float((total_pnl / invested) * 100) if invested != 0 else 0.0
+    roi = float((total_pnl / initial_capital) * 100) if initial_capital != 0 else 0.0
     wins = trades_df[trades_df["realizedProfit"] > 0]
     total_trades = len(trades_df)
     win_rate = float(len(wins) / total_trades * 100) if total_trades else 0.0
@@ -116,15 +123,24 @@ def calculate_portfolio_metrics(trades_df: pd.DataFrame) -> dict[str, float]:
         "ROI": roi,
         "Win_Rate": win_rate,
         "Total_Trades": total_trades,
+        "Initial_Capital": initial_capital,
     }
 
 
 def summarize_symbol_performance(trades_df: pd.DataFrame) -> pd.DataFrame:
-    """Return symbol-level performance metrics for coin comparison."""
+    """Return symbol-level performance metrics for coin comparison.
+    
+    ROI is calculated as: (Total_PnL / Total_Traded_Value) * 100
+    where Total_Traded_Value is the sum of absolute trade values for that symbol.
+    """
     symbol_summary = (
-        trades_df.groupby("symbol")["realizedProfit"]
-        .agg(Total_PnL="sum", Trade_Count="count")
-        .assign(ROI=lambda x: x["Total_PnL"] / x["Total_PnL"].abs().replace(0, 1) * 100)
+        trades_df.groupby("symbol")
+        .apply(lambda x: pd.Series({
+            "Total_PnL": x["realizedProfit"].sum(),
+            "Trade_Count": len(x),
+            "Average_PnL": x["realizedProfit"].mean(),
+            "ROI": float((x["realizedProfit"].sum() / x["trade_value"].abs().sum() * 100) if x["trade_value"].abs().sum() != 0 else 0.0),
+        }))
         .reset_index()
         .sort_values(by="Total_PnL", ascending=False)
     )
