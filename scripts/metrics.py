@@ -107,10 +107,9 @@ def summarize_portfolios(trades_df: pd.DataFrame, initial_capital: float = 10000
              st.error("Data error: 'Port_IDs' column missing. Metrics cannot be grouped.")
              return pd.DataFrame()
              
-        # Groupby and apply
+        # Groupby and apply - Removed include_groups=False for compatibility with older Pandas (2.0.x)
         result = trades_df.groupby("Port_IDs").apply(
-            lambda x: portfolio_summary(x, initial_capital),
-            include_groups=False
+            lambda x: portfolio_summary(x, initial_capital)
         ).reset_index()
         return result
     except Exception as e:
